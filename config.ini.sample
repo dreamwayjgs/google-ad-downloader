@@ -1,2 +1,5 @@
 [google-ads]
 customer_ids = 123-123-2345,111-222-3344
+
+[options]
+interactive = yes

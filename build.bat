@@ -10,5 +10,7 @@ rmdir /s /q deploy 2>nul
 mkdir deploy
 xcopy dist\%NAME% deploy\%NAME% /E /I /Y
 
+copy config.ini.sample deploy\%NAME%\config.ini.sample >nul
+
 echo deploy\%NAME% Created!
 pause

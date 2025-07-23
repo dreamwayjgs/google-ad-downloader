@@ -185,7 +185,7 @@ def check_required_files():
 
 def main():
     config = load_config()
-    do_interactive = config.getboolean("options", "interactive", fallback=False)
+    do_interactive = config.getboolean("options", "interactive", fallback=True)
     if do_interactive:
         interactive_mode(config)
     else:
