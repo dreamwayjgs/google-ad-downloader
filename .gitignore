@@ -9,6 +9,8 @@ deploy/
 google_ads_downloader.exe
 google-ads.yaml
 config.ini
+*.ainote.*
+*-ainote.*
 
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
 

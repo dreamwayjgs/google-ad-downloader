@@ -1,9 +1,11 @@
-from google.ads.googleads.client import GoogleAdsClient
 import pandas as pd
+from google.ads.googleads.client import GoogleAdsClient
 
 
 # 활성화된 캠페인 확인용
-def get_active_campaigns(customer_id, yaml_path="google-ads.yaml"):
+def get_active_campaigns(
+    customer_id, yaml_path="google-ads.yaml", enabled_only: bool = False
+):
     customer_id = customer_id.replace("-", "")
 
     client = GoogleAdsClient.load_from_storage(yaml_path)
@@ -15,15 +17,21 @@ def get_active_campaigns(customer_id, yaml_path="google-ads.yaml"):
             campaign.name,
             campaign.advertising_channel_type
         FROM campaign
+    """
+    if enabled_only:
+        query += """
         WHERE campaign.status = 'ENABLED'
+    """
+
+    query += """
         ORDER BY campaign.name
     """
+
     campaigns_data = []
 
     response = ga_service.search_stream(customer_id=customer_id, query=query)
     for batch in response:
         for row in batch.results:
-
             campaigns_data.append(
                 {
                     "campaign_id": row.campaign.id,
@@ -60,7 +68,7 @@ def get_youtube_video_report(
             AND metrics.impressions > 0
         ORDER BY metrics.impressions DESC
     """
-    channel_data = []
+    channel_rows = []
     campaign_name = ""
 
     response = ga_service.search_stream(customer_id=customer_id, query=channel_query)
@@ -69,12 +77,21 @@ def get_youtube_video_report(
             if not campaign_name:
                 campaign_name = row.campaign.name
 
-            placement_data = {
-                "channel_url": getattr(row.group_placement_view, "target_url", None),
-                "channel_name": row.group_placement_view.display_name or "N/A",
-            }
-            channel_data.append(placement_data)
-    channel_data = pd.DataFrame(channel_data)
+            channel_rows.append(
+                {
+                    "channel_url": getattr(row.group_placement_view, "target_url", None),
+                    "Placement (group)": row.group_placement_view.display_name or "N/A",
+                    "Placement (group) url": getattr(
+                        row.group_placement_view, "target_url", None
+                    ),
+                }
+            )
+
+    if not channel_rows:
+        print("⚠️ 캠페인 게재지면 데이터가 없습니다.")
+        return pd.DataFrame()
+
+    channel_data = pd.DataFrame(channel_rows)
 
     query = f"""
         SELECT 
@@ -112,33 +129,54 @@ def get_youtube_video_report(
                 campaign_name = row.campaign.name
 
             placement_data = {
-                "campaign_id": row.campaign.id,
-                "campaign_name": row.campaign.name,
-                "ad_group_id": row.ad_group.id,
-                "ad_group_name": row.ad_group.name,
-                "placement_url": row.detail_placement_view.placement,
+                # "campaign_id": row.campaign.id,
+                # "campaign_name": row.campaign.name,
+                # "ad_group_id": row.ad_group.id,
+                # "ad_group_name": row.ad_group.name,
+                # "placement_type": row.detail_placement_view.placement_type.name,
                 "channel_url": row.detail_placement_view.group_placement_target_url,
-                "target_url": getattr(row.detail_placement_view, "target_url", None),
-                "display_name": row.detail_placement_view.display_name or "N/A",
-                "placement_type": row.detail_placement_view.placement_type.name,
-                "impressions": row.metrics.impressions,
-                "clicks": row.metrics.clicks,
-                "cost": row.metrics.cost_micros / 1000000,
-                "conversions": row.metrics.conversions,
-                "ctr": row.metrics.ctr,
-                "avg_cpc": row.metrics.average_cpc / 1000000,
-                "video_views": row.metrics.video_views,
-                "video_view_rate": row.metrics.video_view_rate,
-                "conversion_rate": (
-                    (row.metrics.conversions / row.metrics.clicks * 100)
-                    if row.metrics.clicks > 0
-                    else 0
+                "Placement (detail) url": (
+                    getattr(row.detail_placement_view, "target_url", None)
+                    or row.detail_placement_view.placement
                 ),
+                "Placement (detail)": row.detail_placement_view.display_name or "N/A",
+                "Impr.": row.metrics.impressions,
+                "Cost": row.metrics.cost_micros / 1000000,
+                # "Clicks": row.metrics.clicks,
+                # "Conversions": row.metrics.conversions,
+                # "CTR": row.metrics.ctr,
+                # "Avg. CPC": row.metrics.average_cpc / 1000000,
+                # "Video views": row.metrics.video_views,
+                # "Video view rate": row.metrics.video_view_rate,
+                # "Conversion rate": (
+                #     (row.metrics.conversions / row.metrics.clicks * 100)
+                #     if row.metrics.clicks > 0
+                #     else 0
+                # ),
             }
             placements.append(placement_data)
 
+    if not placements:
+        print("⚠️ 조회된 개별 게재위치가 없습니다.")
+        return pd.DataFrame()
+
     df = pd.DataFrame(placements)
     df = pd.merge(df, channel_data, on="channel_url", how="left")
+
+    df["Placement (group)"].fillna("N/A", inplace=True)
+    df["Placement (group) url"].fillna(df["channel_url"], inplace=True)
+    df = df.drop(columns=["channel_url"])
+
+    df = df[
+        [
+            "Placement (group)",
+            "Placement (group) url",
+            "Placement (detail)",
+            "Placement (detail) url",
+            "Impr.",
+            "Cost",
+        ]
+    ]
 
     print(f"캠페인: {campaign_name} (ID: {campaign_id})")
     print(f"총 {len(placements)}개의 개별 게재위치")
@@ -191,7 +229,9 @@ def get_demographic_performance(
           AND metrics.impressions > 0
     """
 
-    gender_response = ga_service.search_stream(customer_id=customer_id, query=gender_query)
+    gender_response = ga_service.search_stream(
+        customer_id=customer_id, query=gender_query
+    )
     age_response = ga_service.search_stream(customer_id=customer_id, query=age_query)
 
     gender_data = []

@@ -1,15 +1,17 @@
-from datetime import datetime, timedelta
-import re
+﻿import re
 import sys
-from pathlib import Path
-from configparser import ConfigParser
 import traceback
+from configparser import ConfigParser
+from datetime import datetime, timedelta
+from pathlib import Path
+
 from InquirerPy import inquirer
+
 from google_ads_downloader.config import load_config
 from google_ads_downloader.core import (
     get_active_campaigns,
-    get_youtube_video_report,
     get_demographic_performance,
+    get_youtube_video_report,
 )
 
 
@@ -22,12 +24,33 @@ def clean_dataframe(df):
     return df.apply(clean_series)
 
 
-def sanitize_filename(text: str, max_length: int = 20) -> str:
+def sanitize_filename(text: str, max_length: int | None = 20) -> str:
     text = text.strip()
-    text = text[:max_length]
+    if max_length is not None and max_length > 0:
+        text = text[:max_length]
     text = re.sub(r'[\\/*?:"<>|]', "", text)  # 파일명에서 금지된 문자 제거
     text = re.sub(r"\s+", "_", text)  # 공백은 _로
     return text
+
+
+def parse_customer_ids(raw: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+
+        if "|" in item:
+            cid, alias = item.split("|", 1)
+            cid = cid.strip()
+            alias = alias.strip()
+        else:
+            cid, alias = item, ""
+
+        if cid:
+            entries.append({"id": cid, "alias": alias})
+
+    return entries
 
 
 def interactive_mode(config: ConfigParser):
@@ -36,25 +59,55 @@ def interactive_mode(config: ConfigParser):
         print("❌ config.ini 의 [google-ads] 섹션이 비어 있습니다. 샘플을 참조해주세요.")
         return
 
-    customer_ids = [cid.strip() for cid in customer_ids_val.split(",")]
+    customer_records = parse_customer_ids(customer_ids_val)
+    if not customer_records:
+        print("❌ customer_ids 설정을 확인해주세요. 최소 한 개 이상 필요합니다.")
+        return
+
     print("✅ 사용 가능한 CUSTOMER IDS:")
+    for record in customer_records:
+        if record["alias"]:
+            print(f"- {record['alias']} ({record['id']})")
+        else:
+            print(f"- {record['id']}")
 
     # 1️⃣ 고객 ID 선택
-    customer_id = inquirer.select(message="고객 ID를 선택하세요:", choices=customer_ids).execute()
+    selected_customer = inquirer.select(
+        message="고객 ID를 선택하세요:",
+        choices=[
+            {
+                "name": f"{record['alias']} ({record['id']})" if record["alias"] else record["id"],
+                "value": record,
+            }
+            for record in customer_records
+        ],
+    ).execute()
+    customer_id = selected_customer["id"]
+    customer_alias = selected_customer["alias"]
 
     # 2️⃣ 캠페인 선택
-    cam_df = get_active_campaigns(customer_id)
+    enabled_only = inquirer.confirm(
+        message="ENABLED 상태의 캠페인만 보시겠습니까?",
+        default=True,
+    ).execute()
+
+    cam_df = get_active_campaigns(customer_id, enabled_only=enabled_only)
     if cam_df.empty:
         print("⚠️ 캠페인이 없습니다.")
         return
 
     campaign_choices = [
-        {"name": f"[{row.campaign_id}] {row.campaign_name[:60]}...", "value": row.campaign_id}
+        {
+            "name": f"[{row.campaign_id}] {row.campaign_name}",
+            "value": row.campaign_id,
+        }
         for _, row in cam_df.iterrows()
     ]
 
-    campaign_id = inquirer.select(
-        message="🎯 캠페인을 선택하세요:", choices=campaign_choices
+    campaign_id = inquirer.fuzzy(
+        message="🎯 캠페인을 선택하세요:",
+        choices=campaign_choices,
+        instruction="검색어를 입력하세요",
     ).execute()
 
     # 3️⃣ 액션 선택
@@ -77,9 +130,12 @@ def interactive_mode(config: ConfigParser):
     # 5️⃣ 데이터 수집 및 저장
     suffix = datetime.strptime(end_date, "%Y-%m-%d").strftime("%y%m%d")
     campaign_row = cam_df[cam_df["campaign_id"] == campaign_id].iloc[0]
-    campaign_name_snippet = sanitize_filename(campaign_row["campaign_name"], max_length=20)
+    campaign_name_snippet = sanitize_filename(campaign_row["campaign_name"], max_length=None)
 
-    base_fname = f"{customer_id}_{campaign_id}_{campaign_name_snippet}_{suffix}"
+    customer_prefix = (
+        f"{sanitize_filename(customer_alias, max_length=20)}_{customer_id}" if customer_alias else customer_id
+    )
+    base_fname = f"{customer_prefix}_{campaign_id}_{campaign_name_snippet}_{suffix}"
 
     output_dir = Path("res/output")
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -89,19 +145,19 @@ def interactive_mode(config: ConfigParser):
             df = get_youtube_video_report(customer_id, campaign_id, start_date, end_date)
             fname = output_dir / f"{base_fname}_video.xlsx"
             df = clean_dataframe(df)
-            df.to_excel(fname, index=False)
+            # NOTE: 업로드 서버에서 첫 2줄 공백 여부를 유연하게 처리해야 합니다.
+            df.to_excel(fname, index=False, startrow=2)
             print(f"\n✅ 게재지면 보고서가 저장되었습니다:\n📁 {fname.resolve()}")
         case 2:
-            gender_df, age_df = get_demographic_performance(
-                customer_id, campaign_id, start_date, end_date
-            )
+            gender_df, age_df = get_demographic_performance(customer_id, campaign_id, start_date, end_date)
             gender_path = output_dir / f"{base_fname}_gender.xlsx"
             age_path = output_dir / f"{base_fname}_age.xlsx"
             gender_df = clean_dataframe(gender_df)
             age_df = clean_dataframe(age_df)
-            gender_df.to_excel(gender_path, index=False)
-            age_df.to_excel(age_path, index=False)
-            print(f"\n✅ 성별/연령 보고서가 저장되었습니다:")
+            # NOTE: 업로드 서버에서 첫 2줄 공백 여부를 유연하게 처리해야 합니다.
+            gender_df.to_excel(gender_path, index=False, startrow=2)
+            age_df.to_excel(age_path, index=False, startrow=2)
+            print("\n✅ 성별/연령 보고서가 저장되었습니다:")
             print(f"📁 성별 리포트: {gender_path.resolve()}")
             print(f"📁 연령 리포트: {age_path.resolve()}")
 
@@ -110,13 +166,14 @@ def interactive_mode_my(config: ConfigParser):
     customer_ids_val = config.get("google-ads", "customer_ids", fallback="")
     if customer_ids_val == "":
         print("config.ini 의 google-ads 섹션이 잘못되었습니다. 샘플을 참조해주세요")
-    customer_ids = customer_ids_val.split(",")
+    customer_records = parse_customer_ids(customer_ids_val)
+    customer_ids = [record["id"] for record in customer_records]
     print("사용 가능한 CUSTOMER IDS")
 
     # TODO: customer id 선택
     id = "USER SELECTED_ID"
 
-    cam_df = get_active_campaigns(id)
+    cam_df = get_active_campaigns(id, enabled_only=False)
     """
     cam_df 는 대충 이렇게 생겼다 (마크다운)
     |    |   campaign_id | campaign_name                                                                          | advertising_channel_type   | resource_name                              |
@@ -147,9 +204,7 @@ def interactive_mode_my(config: ConfigParser):
         case 2:
             # TODO: 잠재고객 결과 관련 쿼리를 묻는 섹션
             # TODO: 현재는 날짜만 물어보면된다
-            gender_df, age_df = get_demographic_performance(
-                id, cam_id, start_date=start_date, end_date=end_date
-            )
+            gender_df, age_df = get_demographic_performance(id, cam_id, start_date=start_date, end_date=end_date)
             # TODO: 파일 저장
             # TODO: 기본값 파일명을 제시하기: {id}_{cam_id}_{end_date를 YYMMDD 로}
             fname = "..."
