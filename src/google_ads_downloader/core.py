@@ -3,9 +3,7 @@ from google.ads.googleads.client import GoogleAdsClient
 
 
 # 활성화된 캠페인 확인용
-def get_active_campaigns(
-    customer_id, yaml_path="google-ads.yaml", enabled_only: bool = False
-):
+def get_active_campaigns(customer_id, yaml_path="google-ads.yaml", enabled_only: bool = False):
     customer_id = customer_id.replace("-", "")
 
     client = GoogleAdsClient.load_from_storage(yaml_path)
@@ -81,9 +79,7 @@ def get_youtube_video_report(
                 {
                     "channel_url": getattr(row.group_placement_view, "target_url", None),
                     "Placement (group)": row.group_placement_view.display_name or "N/A",
-                    "Placement (group) url": getattr(
-                        row.group_placement_view, "target_url", None
-                    ),
+                    "Placement (group) url": getattr(row.group_placement_view, "target_url", None),
                 }
             )
 
@@ -136,8 +132,7 @@ def get_youtube_video_report(
                 # "placement_type": row.detail_placement_view.placement_type.name,
                 "channel_url": row.detail_placement_view.group_placement_target_url,
                 "Placement (detail) url": (
-                    getattr(row.detail_placement_view, "target_url", None)
-                    or row.detail_placement_view.placement
+                    getattr(row.detail_placement_view, "target_url", None) or row.detail_placement_view.placement
                 ),
                 "Placement (detail)": row.detail_placement_view.display_name or "N/A",
                 "Impr.": row.metrics.impressions,
@@ -229,9 +224,7 @@ def get_demographic_performance(
           AND metrics.impressions > 0
     """
 
-    gender_response = ga_service.search_stream(
-        customer_id=customer_id, query=gender_query
-    )
+    gender_response = ga_service.search_stream(customer_id=customer_id, query=gender_query)
     age_response = ga_service.search_stream(customer_id=customer_id, query=age_query)
 
     gender_data = []
